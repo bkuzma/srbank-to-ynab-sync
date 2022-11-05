@@ -8,6 +8,10 @@ declare global {
             YNAB_TOKEN: string;
             YNAB_BUDGET_ID: string;
             YNAB_ACCOUNT_ID: string;
+            KV_BUCKET: string;
+            KV_SECRET: string;
+            KV_READ_KEY: string;
+            KV_WRITE_KEY: string;
         }
     }
 }

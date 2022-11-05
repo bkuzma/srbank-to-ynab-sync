@@ -2,32 +2,31 @@ import { TransactionDTO, TransactionsDTO } from './bank.types';
 import { SaveTransaction, SaveTransactionsWrapper } from './ynab.types';
 
 require('dotenv').config();
-const { writeFileSync, readFileSync } = require('fs');
-const { join } = require('path');
 const ynab = require('ynab');
+const KVdb = require('kvdb.io');
 
-const getRefreshToken = () => {
-    const value: string = readFileSync(
-        join(__dirname, './refreshToken.txt'),
-        'utf-8'
-    );
-    return value;
+enum KV_KEY {
+    REFRESH_TOKEN = 'refreshToken',
+    LAST_SYNC_DATE = 'lastSyncDate',
+}
+
+const getValueFromBucket = async (key: string): Promise<string | null> => {
+    try {
+        const bucket = KVdb.bucket(
+            process.env.KV_BUCKET,
+            process.env.KV_READ_KEY
+        );
+        const res = await bucket.get(key);
+
+        return res;
+    } catch {
+        return Promise.resolve(null);
+    }
 };
 
-const getLastSyncDate = () => {
-    const value: string = readFileSync(
-        join(__dirname, './lastSyncDate.txt'),
-        'utf-8'
-    );
-    return value;
-};
-
-const saveRefreshToken = (value: string) => {
-    writeFileSync(join(__dirname, './refreshToken.txt'), value);
-};
-
-const saveLastSyncDate = (value: string) => {
-    writeFileSync(join(__dirname, './lastSyncDate.txt'), value);
+const setValueInBucket = async (key: KV_KEY, value: string) => {
+    const bucket = KVdb.bucket(process.env.KV_BUCKET, process.env.KV_WRITE_KEY);
+    await bucket.set(key, value);
 };
 
 const fetchToken = async (
@@ -60,6 +59,7 @@ const fetchBankTransactions = async (
     accountKey: string,
     fromDate: string
 ): Promise<TransactionDTO[]> => {
+    // TODO use node-fetch
     const transactionsResponse = await fetch(
         'https://api.sparebank1.no/personal/banking/transactions?' +
             new URLSearchParams({ accountKey, fromDate }),
@@ -117,23 +117,26 @@ const mapBankTransactionsToYnabTransactions = (
 const main = async () => {
     console.log('Getting new access token...');
 
-    const refreshToken = getRefreshToken();
+    const refreshToken = await getValueFromBucket(KV_KEY.REFRESH_TOKEN);
+
+    if (!refreshToken) {
+        throw new Error('No refresh token found');
+    }
+
     const { access_token: accessToken, refresh_token: newRefreshToken } =
         await fetchToken(
             refreshToken,
             process.env.BANK_CLIENT_ID,
             process.env.BANK_CLIENT_SECRET
         );
-    saveRefreshToken(newRefreshToken);
+    await setValueInBucket(KV_KEY.REFRESH_TOKEN, newRefreshToken);
 
-    console.log('Token saved');
+    console.log('Refresh token saved');
 
-    let lastSyncDate;
     const todayDate = getDateString(new Date());
+    let lastSyncDate = await getValueFromBucket(KV_KEY.LAST_SYNC_DATE);
 
-    try {
-        lastSyncDate = getLastSyncDate();
-    } catch (e) {
+    if (!lastSyncDate) {
         lastSyncDate = todayDate;
     }
 
@@ -149,33 +152,28 @@ const main = async () => {
 
     if (bankTransactions.length === 0) {
         console.log('No new transactions');
-        return;
-    }
+    } else {
+        const ynabTransactions =
+            mapBankTransactionsToYnabTransactions(bankTransactions);
 
-    const ynabTransactions =
-        mapBankTransactionsToYnabTransactions(bankTransactions);
+        console.log('Sending transactions to YNAB...');
 
-    console.log('Sending transactions to YNAB...');
+        const ynabAPI = new ynab.API(process.env.YNAB_TOKEN);
+        const dto: SaveTransactionsWrapper = {
+            transactions: ynabTransactions,
+        };
 
-    // post transactions to YNAB
-    const ynabAPI = new ynab.API(process.env.YNAB_TOKEN);
-    const dto: SaveTransactionsWrapper = {
-        transactions: ynabTransactions,
-    };
-    console.log('ynabTransactions', ynabTransactions);
-
-    try {
         await ynabAPI.transactions.createTransactions(
             process.env.YNAB_BUDGET_ID,
             dto
         );
-    } catch (e) {
-        console.log('e', e);
+
+        console.log('Transactions sent to YNAB');
     }
 
-    console.log('Transactions sent to YNAB');
+    await setValueInBucket(KV_KEY.LAST_SYNC_DATE, todayDate);
 
-    saveLastSyncDate(todayDate);
+    console.log('Saved sync date');
 };
 
 main();
