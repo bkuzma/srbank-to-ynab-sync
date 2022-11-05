@@ -1,5 +1,6 @@
-import { TokenDTO, TransactionDTO, TransactionsDTO } from './bank.types';
-import { SaveTransaction, SaveTransactionsWrapper } from './ynab.types';
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { TokenDTO, TransactionDTO, TransactionsDTO } from '../types/bank.types';
+import { SaveTransaction, SaveTransactionsWrapper } from '../types/ynab.types';
 
 require('dotenv').config();
 const fetch = require('node-fetch');
@@ -115,7 +116,7 @@ const mapBankTransactionsToYnabTransactions = (
     });
 };
 
-const main = async () => {
+const sync = async () => {
     console.log('Getting new access token...');
 
     const refreshToken = await getValueFromBucket(KV_KEY.REFRESH_TOKEN);
@@ -177,4 +178,8 @@ const main = async () => {
     console.log('Saved sync date');
 };
 
-main();
+export default async function (req: VercelRequest, res: VercelResponse) {
+    await sync();
+
+    res.send('Successfully synced!');
+}

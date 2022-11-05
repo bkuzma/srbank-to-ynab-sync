@@ -1,6 +1,7 @@
 {
     "dependencies": {
         "@types/node": "^18.11.9",
+        "@vercel/node": "^2.6.1",
         "dotenv": "^16.0.3",
         "kvdb.io": "^1.0.5",
         "node-fetch": "2",
