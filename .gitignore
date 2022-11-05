@@ -1,0 +1,5 @@
+.DS_Store
+node_modules
+lastSyncDate.txt
+refreshToken.txt
+.env
