@@ -1,7 +1,8 @@
-import { TransactionDTO, TransactionsDTO } from './bank.types';
+import { TokenDTO, TransactionDTO, TransactionsDTO } from './bank.types';
 import { SaveTransaction, SaveTransactionsWrapper } from './ynab.types';
 
 require('dotenv').config();
+const fetch = require('node-fetch');
 const ynab = require('ynab');
 const KVdb = require('kvdb.io');
 
@@ -33,7 +34,7 @@ const fetchToken = async (
     refreshToken: string,
     clientId: string,
     clientSecret: string
-): Promise<{ access_token: string; refresh_token: string }> => {
+): Promise<TokenDTO> => {
     const body = new URLSearchParams({
         client_id: clientId,
         client_secret: clientSecret,
@@ -49,7 +50,7 @@ const fetchToken = async (
         body,
     });
 
-    const json = await response.json();
+    const json = (await response.json()) as TokenDTO;
 
     return json;
 };
@@ -59,7 +60,6 @@ const fetchBankTransactions = async (
     accountKey: string,
     fromDate: string
 ): Promise<TransactionDTO[]> => {
-    // TODO use node-fetch
     const transactionsResponse = await fetch(
         'https://api.sparebank1.no/personal/banking/transactions?' +
             new URLSearchParams({ accountKey, fromDate }),
@@ -71,7 +71,8 @@ const fetchBankTransactions = async (
         }
     );
 
-    const transactionsDTO: TransactionsDTO = await transactionsResponse.json();
+    const transactionsDTO: TransactionsDTO =
+        (await transactionsResponse.json()) as TransactionsDTO;
 
     return transactionsDTO.transactions;
 };

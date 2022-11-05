@@ -16,3 +16,8 @@ export interface TransactionDTO {
 export interface TransactionsDTO {
     transactions: TransactionDTO[];
 }
+
+export interface TokenDTO {
+    access_token: string;
+    refresh_token: string;
+}
