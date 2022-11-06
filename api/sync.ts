@@ -5,30 +5,45 @@ import { SaveTransaction, SaveTransactionsWrapper } from '../types/ynab.types';
 require('dotenv').config();
 const fetch = require('node-fetch');
 const ynab = require('ynab');
-const KVdb = require('kvdb.io');
+const faunadb = require('faunadb');
+
+const q = faunadb.query;
+const client = new faunadb.Client({
+    secret: process.env.FAUNA_KEY,
+    endpoint: process.env.FAUNA_BASE_URL,
+});
 
 enum KV_KEY {
     REFRESH_TOKEN = 'refreshToken',
     LAST_SYNC_DATE = 'lastSyncDate',
 }
 
-const getValueFromBucket = async (key: string): Promise<string | null> => {
-    try {
-        const bucket = KVdb.bucket(
-            process.env.KV_BUCKET,
-            process.env.KV_READ_KEY
-        );
-        const res = await bucket.get(key);
-
-        return res;
-    } catch {
-        return Promise.resolve(null);
-    }
+const getValueFromBucket = async (key: string): Promise<string> => {
+    const value = await client.query(
+        q.Get(
+            q.Ref(
+                q.Collection(process.env.FAUNA_COLLECTION_NAME),
+                process.env.FAUNA_DOCUMENT_ID
+            )
+        )
+    );
+    return value.data[key];
 };
 
 const setValueInBucket = async (key: KV_KEY, value: string) => {
-    const bucket = KVdb.bucket(process.env.KV_BUCKET, process.env.KV_WRITE_KEY);
-    await bucket.set(key, value);
+    await client.query(
+        q.Update(
+            q.Ref(
+                q.Collection(process.env.FAUNA_COLLECTION_NAME),
+                process.env.FAUNA_DOCUMENT_ID
+            ),
+            {
+                data: {
+                    [key]: value,
+                },
+            }
+        )
+    );
 };
 
 const fetchToken = async (
