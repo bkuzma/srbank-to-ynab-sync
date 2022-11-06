@@ -173,7 +173,9 @@ const sync = async () => {
         console.log('Transactions sent to YNAB');
     }
 
-    await setValueInBucket(KV_KEY.LAST_SYNC_DATE, todayDate);
+    if (todayDate !== lastSyncDate) {
+        await setValueInBucket(KV_KEY.LAST_SYNC_DATE, todayDate);
+    }
 
     console.log('Saved sync date');
 };
