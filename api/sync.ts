@@ -6,7 +6,7 @@ require('dotenv').config();
 const fetch = require('node-fetch');
 const ynab = require('ynab');
 const faunadb = require('faunadb');
-const { zonedTimeToUtc, utcToZonedTime, format } = require('date-fns-tz');
+const { formatInTimeZone } = require('date-fns-tz');
 
 const q = faunadb.query;
 const client = new faunadb.Client({
@@ -95,8 +95,7 @@ const fetchBankTransactions = async (
 };
 
 const getDateString = (date: Date): string => {
-    const zonedDate = utcToZonedTime(date, 'Europe/Oslo');
-    return zonedDate.format('YYYY-MM-dd');
+    return formatInTimeZone(date, 'Europe/Oslo', 'yyyy-MM-dd');
 };
 
 const mapBankTransactionsToYnabTransactions = (
