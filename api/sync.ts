@@ -122,7 +122,7 @@ const mapBankTransactionsToYnabTransactions = (
             account_id: process.env.YNAB_ACCOUNT_ID,
             date,
             amount: bankTransaction.amount! * 1000,
-            payee_name: bankTransaction.description!,
+            payee_name: bankTransaction.cleanedDescription!,
             cleared:
                 bankTransaction.bookingStatus === 'BOOKED'
                     ? 'cleared'
