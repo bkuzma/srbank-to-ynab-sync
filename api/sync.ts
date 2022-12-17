@@ -101,6 +101,7 @@ const getDateString = (date: Date): string => {
 const mapBankTransactionsToYnabTransactions = (
     bankTransactions: TransactionDTO[]
 ): SaveTransaction[] => {
+    console.log('bankTransactions', bankTransactions);
     const occurenceMap: { [key: string]: number } = {};
     return bankTransactions.map((bankTransaction) => {
         const transactionKey = `${bankTransaction.date}${bankTransaction.amount}`;
@@ -113,15 +114,14 @@ const mapBankTransactionsToYnabTransactions = (
 
         const occurrence = occurenceMap[transactionKey];
         const date = getDateString(new Date(bankTransaction.date!));
+        const amount = bankTransaction.amount! * 1000;
 
-        const importId = `YNAB:${
-            bankTransaction.amount! * 1000
-        }:${date}:${occurrence}`;
+        const importId = `YNAB:${amount}:${date}:${occurrence}`;
 
         return {
             account_id: process.env.YNAB_ACCOUNT_ID,
             date,
-            amount: bankTransaction.amount! * 1000,
+            amount,
             payee_name: bankTransaction.cleanedDescription!,
             cleared:
                 bankTransaction.bookingStatus === 'BOOKED'
@@ -173,6 +173,7 @@ const sync = async () => {
     } else {
         const ynabTransactions =
             mapBankTransactionsToYnabTransactions(bankTransactions);
+        console.log('ynabTransactions', ynabTransactions);
 
         console.log('Sending transactions to YNAB...');
 
