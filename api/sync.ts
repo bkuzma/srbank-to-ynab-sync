@@ -1,12 +1,20 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { TokenDTO, TransactionDTO, TransactionsDTO } from '../types/bank.types';
-import { SaveTransaction, SaveTransactionsWrapper } from '../types/ynab.types';
+import {
+    SaveTransaction,
+    SaveTransactionsWrapper,
+    TransactionDetail,
+    TransactionsResponse,
+    UpdateTransaction,
+    UpdateTransactionsWrapper,
+} from '../types/ynab.types';
 
 require('dotenv').config();
 const fetch = require('node-fetch');
 const ynab = require('ynab');
 const faunadb = require('faunadb');
 const { formatInTimeZone } = require('date-fns-tz');
+const subDays = require('date-fns/subDays');
 
 const q = faunadb.query;
 const client = new faunadb.Client({
@@ -131,6 +139,78 @@ const mapBankTransactionsToYnabTransactions = (
     });
 };
 
+/*
+This attempts to fix a problem whereby uncleared bank transactions have a nice neat
+description such as "Netonnet" and the subsequent cleared transaction has a name more
+like "*3301 25.12 NOK 250.00 NETONNET SANDNES Kurs: 1.0000". The result is that both
+the uncleared and the cleared versions end up in YNAB, and the cleared version has an
+unwieldy name.
+
+We try to fix this by checking if cleared bank transactions already have an uncleared
+transaction in YNAB, and if so, we update those existing uncleared transactions. If there
+is no matching transaction, we simply post them to YNAB as usual.
+*/
+const dedupeTransactions = (
+    bankTransactions: TransactionDTO[],
+    ynabTransactions: TransactionDetail[]
+): {
+    transactionsToClear: UpdateTransaction[];
+    transactionsToAdd: SaveTransaction[];
+} => {
+    const transactionsToClear: UpdateTransaction[] = [];
+    const transactionsToAdd: SaveTransaction[] = [];
+
+    bankTransactions.forEach((bankTransaction) => {
+        // if it's a pending transaction, we'll send to YNAB
+        if (bankTransaction.bookingStatus === 'PENDING') {
+            transactionsToAdd.push(
+                ...mapBankTransactionsToYnabTransactions([bankTransaction])
+            );
+
+            return;
+        }
+
+        // else it's a cleared transaction, so we check if there's a matching uncleared
+        // transaction in YNAB. if so, we udpate that transaction to be cleared rather
+        // than adding a new transaction.
+
+        const matchingTransaction = ynabTransactions.find((ynabTransaction) => {
+            if (
+                bankTransaction.amount === undefined ||
+                ynabTransaction.payee_name === undefined
+            ) {
+                return false;
+            }
+
+            const isMatch =
+                ynabTransaction.amount === bankTransaction.amount * 1000 &&
+                bankTransaction.description
+                    ?.toLowerCase()
+                    .includes(ynabTransaction.payee_name.toLowerCase());
+
+            return isMatch;
+        });
+
+        // do nothing if the matching YNAB transaction is cleared
+
+        if (!matchingTransaction) {
+            transactionsToAdd.push(
+                ...mapBankTransactionsToYnabTransactions([bankTransaction])
+            );
+        } else if (!matchingTransaction.cleared) {
+            transactionsToClear.push({
+                ...matchingTransaction,
+                cleared: 'cleared',
+            });
+        }
+    });
+
+    return {
+        transactionsToClear,
+        transactionsToAdd,
+    };
+};
+
 const sync = async () => {
     console.log('Getting new access token...');
 
@@ -170,22 +250,56 @@ const sync = async () => {
     if (bankTransactions.length === 0) {
         console.log('No new transactions');
     } else {
-        const ynabTransactions =
-            mapBankTransactionsToYnabTransactions(bankTransactions);
-
-        console.log('Sending transactions to YNAB...');
-
         const ynabAPI = new ynab.API(process.env.YNAB_TOKEN);
-        const dto: SaveTransactionsWrapper = {
-            transactions: ynabTransactions,
-        };
+        const sinceDate = getDateString(subDays(new Date(), 5));
 
-        await ynabAPI.transactions.createTransactions(
-            process.env.YNAB_BUDGET_ID,
-            dto
+        const recentYnabTransactionsResponse: TransactionsResponse =
+            await ynabAPI.transactions.getTransactionsByAccount(
+                process.env.YNAB_BUDGET_ID,
+                process.env.YNAB_ACCOUNT_ID,
+                sinceDate
+            );
+        const recentYnabTransactions =
+            recentYnabTransactionsResponse.data.transactions;
+
+        const { transactionsToClear, transactionsToAdd } = dedupeTransactions(
+            bankTransactions,
+            recentYnabTransactions
         );
 
-        console.log('Transactions sent to YNAB');
+        if (transactionsToClear.length > 0) {
+            console.log(
+                `Clearing ${transactionsToClear.length} existing YNAB transaction(s)`
+            );
+
+            const dto: UpdateTransactionsWrapper = {
+                transactions: transactionsToClear,
+            };
+
+            await ynabAPI.transactions.updateTransactions(
+                process.env.YNAB_BUDGET_ID,
+                dto
+            );
+
+            console.log('Transactions marked as cleared');
+        }
+
+        if (transactionsToAdd.length > 0) {
+            console.log(
+                `Sending ${transactionsToAdd.length} new transaction(s) to YNAB...`
+            );
+
+            const dto: SaveTransactionsWrapper = {
+                transactions: transactionsToAdd,
+            };
+
+            await ynabAPI.transactions.createTransactions(
+                process.env.YNAB_BUDGET_ID,
+                dto
+            );
+
+            console.log('Transactions sent to YNAB');
+        }
     }
 
     if (todayDate !== lastSyncDate) {
