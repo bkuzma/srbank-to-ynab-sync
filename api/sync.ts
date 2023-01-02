@@ -197,7 +197,7 @@ const dedupeTransactions = (
             transactionsToAdd.push(
                 ...mapBankTransactionsToYnabTransactions([bankTransaction])
             );
-        } else if (!matchingTransaction.cleared) {
+        } else if (matchingTransaction.cleared === 'uncleared') {
             transactionsToClear.push({
                 ...matchingTransaction,
                 cleared: 'cleared',
