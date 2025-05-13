@@ -211,6 +211,23 @@ const dedupeTransactions = (
     };
 };
 
+async function getLatestYnabTransactionDate(
+    accountId: string
+): Promise<string> {
+    const ynabAPI = new ynab.API(process.env.YNAB_TOKEN);
+    const transactionsResponse = await ynabAPI.transactions.getTransactions(
+        process.env.YNAB_BUDGET_ID,
+        accountId,
+        undefined,
+        1
+    );
+    const transactions = transactionsResponse.data.transactions;
+    if (transactions.length === 0) {
+        return '1900-01-01';
+    }
+    return transactions[0].date;
+}
+
 const sync = async () => {
     console.log('Getting new access token...');
 
@@ -230,12 +247,9 @@ const sync = async () => {
 
     console.log('Refresh token saved');
 
-    const todayDate = getDateString(new Date());
-    let lastSyncDate = await getValueFromBucket(KV_KEY.LAST_SYNC_DATE);
-
-    if (!lastSyncDate) {
-        lastSyncDate = todayDate;
-    }
+    const lastSyncDate = await getLatestYnabTransactionDate(
+        process.env.YNAB_ACCOUNT_ID
+    );
 
     console.log(`Getting bank transactions from ${lastSyncDate} ...`);
 
@@ -301,12 +315,6 @@ const sync = async () => {
             console.log('Transactions sent to YNAB');
         }
     }
-
-    if (todayDate !== lastSyncDate) {
-        await setValueInBucket(KV_KEY.LAST_SYNC_DATE, todayDate);
-    }
-
-    console.log('Saved sync date');
 };
 
 export default async function (req: VercelRequest, res: VercelResponse) {
