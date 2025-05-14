@@ -16,10 +16,27 @@ const faunadb = require('faunadb');
 const { formatInTimeZone } = require('date-fns-tz');
 const subDays = require('date-fns/subDays');
 
+// Runtime check for required env variables
+const requiredEnv = [
+    'FAUNA_KEY',
+    'FAUNA_BASE_URL',
+    'FAUNA_COLLECTION_NAME',
+    'FAUNA_DOCUMENT_ID',
+    'BANK_CLIENT_ID',
+    'BANK_CLIENT_SECRET',
+    'BANK_ACCOUNT_KEY',
+    'YNAB_TOKEN',
+    'YNAB_BUDGET_ID',
+    'YNAB_ACCOUNT_ID',
+];
+for (const key of requiredEnv) {
+    if (!process.env[key]) throw new Error(`Missing env variable: ${key}`);
+}
+
 const q = faunadb.query;
 const client = new faunadb.Client({
-    secret: process.env.FAUNA_KEY,
-    endpoint: process.env.FAUNA_BASE_URL,
+    secret: process.env.FAUNA_KEY!,
+    endpoint: process.env.FAUNA_BASE_URL!,
 });
 
 enum KV_KEY {
@@ -27,15 +44,21 @@ enum KV_KEY {
     LAST_SYNC_DATE = 'lastSyncDate',
 }
 
+interface FaunaResponse {
+    data: {
+        [key: string]: string;
+    };
+}
+
 const getValueFromBucket = async (key: string): Promise<string> => {
-    const value = await client.query(
+    const value = (await client.query(
         q.Get(
             q.Ref(
-                q.Collection(process.env.FAUNA_COLLECTION_NAME),
-                process.env.FAUNA_DOCUMENT_ID
+                q.Collection(process.env.FAUNA_COLLECTION_NAME!),
+                process.env.FAUNA_DOCUMENT_ID!
             )
         )
-    );
+    )) as FaunaResponse;
     return value.data[key];
 };
 
@@ -43,8 +66,8 @@ const setValueInBucket = async (key: KV_KEY, value: string) => {
     await client.query(
         q.Update(
             q.Ref(
-                q.Collection(process.env.FAUNA_COLLECTION_NAME),
-                process.env.FAUNA_DOCUMENT_ID
+                q.Collection(process.env.FAUNA_COLLECTION_NAME!),
+                process.env.FAUNA_DOCUMENT_ID!
             ),
             {
                 data: {
@@ -67,6 +90,7 @@ const fetchToken = async (
         grant_type: 'refresh_token',
     });
 
+    console.log('Fetching new token with refresh token...');
     const response = await fetch('https://api-auth.sparebank1.no/oauth/token', {
         method: 'POST',
         headers: {
@@ -75,7 +99,20 @@ const fetchToken = async (
         body,
     });
 
+    if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Token refresh error:', {
+            status: response.status,
+            statusText: response.statusText,
+            body: errorText,
+        });
+        throw new Error(
+            `Token refresh failed: ${response.status} ${response.statusText}`
+        );
+    }
+
     const json = (await response.json()) as TokenDTO;
+    console.log('Token refresh successful, got new tokens');
 
     return json;
 };
@@ -85,21 +122,40 @@ const fetchBankTransactions = async (
     accountKey: string,
     fromDate: string
 ): Promise<TransactionDTO[]> => {
-    const transactionsResponse = await fetch(
+    const url =
         'https://api.sparebank1.no/personal/banking/transactions?' +
-            new URLSearchParams({ accountKey, fromDate }),
-        {
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-                Accept: 'application/vnd.sparebank1.v1+json;charset=utf-8',
-            },
-        }
-    );
+        new URLSearchParams({ accountKey, fromDate });
 
-    const transactionsDTO: TransactionsDTO =
-        (await transactionsResponse.json()) as TransactionsDTO;
+    console.log('Fetching transactions from:', url);
 
-    return transactionsDTO.transactions;
+    const response = await fetch(url, {
+        headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: 'application/vnd.sparebank1.v1+json;charset=utf-8',
+        },
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Bank API error:', {
+            status: response.status,
+            statusText: response.statusText,
+            body: errorText,
+        });
+        throw new Error(
+            `Bank API error: ${response.status} ${response.statusText}`
+        );
+    }
+
+    try {
+        const transactionsDTO: TransactionsDTO = await response.json();
+        return transactionsDTO.transactions;
+    } catch (error) {
+        console.error('Failed to parse bank API response:', error);
+        const responseText = await response.text();
+        console.error('Raw response:', responseText);
+        throw new Error('Failed to parse bank API response');
+    }
 };
 
 const getDateString = (date: Date): string => {
@@ -126,7 +182,7 @@ const mapBankTransactionsToYnabTransactions = (
         const importId = `YNAB:${amount}:${date}:${occurrence}`;
 
         return {
-            account_id: process.env.YNAB_ACCOUNT_ID,
+            account_id: process.env.YNAB_ACCOUNT_ID!,
             date,
             amount,
             payee_name: bankTransaction.cleanedDescription!,
@@ -214,9 +270,9 @@ const dedupeTransactions = (
 async function getLatestYnabTransactionDate(
     accountId: string
 ): Promise<string> {
-    const ynabAPI = new ynab.API(process.env.YNAB_TOKEN);
+    const ynabAPI = new ynab.API(process.env.YNAB_TOKEN!);
     const transactionsResponse = await ynabAPI.transactions.getTransactions(
-        process.env.YNAB_BUDGET_ID,
+        process.env.YNAB_BUDGET_ID!,
         accountId,
         undefined,
         1
@@ -240,22 +296,22 @@ const sync = async () => {
     const { access_token: accessToken, refresh_token: newRefreshToken } =
         await fetchToken(
             refreshToken,
-            process.env.BANK_CLIENT_ID,
-            process.env.BANK_CLIENT_SECRET
+            process.env.BANK_CLIENT_ID!,
+            process.env.BANK_CLIENT_SECRET!
         );
     await setValueInBucket(KV_KEY.REFRESH_TOKEN, newRefreshToken);
 
     console.log('Refresh token saved');
 
     const lastSyncDate = await getLatestYnabTransactionDate(
-        process.env.YNAB_ACCOUNT_ID
+        process.env.YNAB_ACCOUNT_ID!
     );
 
     console.log(`Getting bank transactions from ${lastSyncDate} ...`);
 
     const bankTransactions = await fetchBankTransactions(
         accessToken,
-        process.env.BANK_ACCOUNT_KEY,
+        process.env.BANK_ACCOUNT_KEY!,
         lastSyncDate
     );
 
@@ -264,7 +320,7 @@ const sync = async () => {
     if (bankTransactions.length === 0) {
         console.log('No new transactions');
     } else {
-        const ynabAPI = new ynab.API(process.env.YNAB_TOKEN);
+        const ynabAPI = new ynab.API(process.env.YNAB_TOKEN!);
         const sinceDate = getDateString(subDays(new Date(), 5));
 
         const recentYnabTransactionsResponse: TransactionsResponse =
