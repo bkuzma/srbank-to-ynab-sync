@@ -5,6 +5,11 @@ export function basicAuth(
     res: VercelResponse,
     next: () => void
 ) {
+    // Allow Vercel cron jobs to bypass authentication
+    if (req.headers['x-vercel-cron'] === process.env.CRON_SECRET) {
+        return next();
+    }
+
     // Check if environment variables are set
     if (!process.env.BASIC_AUTH_USER || !process.env.BASIC_AUTH_PASSWORD) {
         console.error('Basic auth credentials not configured');
