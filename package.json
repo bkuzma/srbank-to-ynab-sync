@@ -22,5 +22,8 @@
     },
     "devDependencies": {
         "@types/formidable": "^3.4.5"
+    },
+    "engines": {
+        "node": "18.x"
     }
 }
