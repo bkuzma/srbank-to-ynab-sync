@@ -5,6 +5,7 @@ import * as ynab from 'ynab';
 import faunadb from 'faunadb';
 import { IncomingForm, Fields, Files, File } from 'formidable';
 import fs from 'fs';
+import { basicAuth } from '../middleware';
 
 require('dotenv').config();
 
@@ -147,83 +148,88 @@ export const config = {
 };
 
 export default async function (req: VercelRequest, res: VercelResponse) {
-    if (req.method !== 'POST') {
-        return res.status(405).send('Method not allowed');
-    }
-
-    const form = new IncomingForm();
-
-    form.parse(req, async (err: any, fields: Fields, files: Files) => {
-        if (err) {
-            console.error('Form parse error:', err);
-            return res.status(400).send('Error parsing form');
+    // Apply basic auth middleware
+    basicAuth(req, res, () => {
+        if (req.method !== 'POST') {
+            return res.status(405).send('Method not allowed');
         }
 
-        const file = files.csv as File | File[] | undefined;
-        if (!file) {
-            return res.status(400).send('No CSV file provided');
-        }
+        const form = new IncomingForm();
 
-        // formidable v3: file is an array if multiple: handle both cases
-        const csvFile = Array.isArray(file) ? file[0] : file;
-        const data = await fs.promises.readFile(csvFile.filepath);
-        const csvContent = data.toString('utf-8');
-
-        try {
-            // Preprocess CSV: strip quotes from header row
-            const lines = csvContent.split(/\r?\n/);
-            if (lines.length > 0) {
-                lines[0] = lines[0].replace(/"/g, '');
-            }
-            const preprocessedCsv = lines.join('\n');
-
-            // Parse CSV data
-            const records = parse(preprocessedCsv, {
-                columns: true,
-                skip_empty_lines: true,
-                delimiter: ';',
-                trim: true,
-                skipRecordsWithError: true,
-                fromLine: 1,
-                relaxColumnCount: true,
-                relaxQuotes: true,
-                ltrim: true,
-                rtrim: true,
-                quote: '"',
-            }) as CsvTransaction[];
-
-            // Get last sync date from YNAB
-            const lastSyncDate = await getLatestYnabTransactionDate(
-                process.env.YNAB_CREDIT_CARD_ACCOUNT_ID!
-            );
-
-            // Map CSV transactions to YNAB format
-            const ynabTransactions = mapCsvTransactionsToYnabTransactions(
-                records,
-                lastSyncDate
-            );
-
-            if (ynabTransactions.length === 0) {
-                return res.status(200).send('No new transactions to import');
+        form.parse(req, async (err: any, fields: Fields, files: Files) => {
+            if (err) {
+                console.error('Form parse error:', err);
+                return res.status(400).send('Error parsing form');
             }
 
-            // Upload to YNAB
-            const ynabAPI = new ynab.API(process.env.YNAB_TOKEN!);
-            const dto: ynab.SaveTransactionsWrapper = {
-                transactions: ynabTransactions,
-            };
+            const file = files.csv as File | File[] | undefined;
+            if (!file) {
+                return res.status(400).send('No CSV file provided');
+            }
 
-            await ynabAPI.transactions.createTransactions(
-                process.env.YNAB_BUDGET_ID!,
-                dto
-            );
+            // formidable v3: file is an array if multiple: handle both cases
+            const csvFile = Array.isArray(file) ? file[0] : file;
+            const data = await fs.promises.readFile(csvFile.filepath);
+            const csvContent = data.toString('utf-8');
 
-            res.status(200).send(
-                `Successfully imported ${ynabTransactions.length} transactions`
-            );
-        } catch (error) {
-            console.error('Error processing CSV:', error);
-            res.status(500).send('Error processing CSV file');
-        }
+            try {
+                // Preprocess CSV: strip quotes from header row
+                const lines = csvContent.split(/\r?\n/);
+                if (lines.length > 0) {
+                    lines[0] = lines[0].replace(/"/g, '');
+                }
+                const preprocessedCsv = lines.join('\n');
+
+                // Parse CSV data
+                const records = parse(preprocessedCsv, {
+                    columns: true,
+                    skip_empty_lines: true,
+                    delimiter: ';',
+                    trim: true,
+                    skipRecordsWithError: true,
+                    fromLine: 1,
+                    relaxColumnCount: true,
+                    relaxQuotes: true,
+                    ltrim: true,
+                    rtrim: true,
+                    quote: '"',
+                }) as CsvTransaction[];
+
+                // Get last sync date from YNAB
+                const lastSyncDate = await getLatestYnabTransactionDate(
+                    process.env.YNAB_CREDIT_CARD_ACCOUNT_ID!
+                );
+
+                // Map CSV transactions to YNAB format
+                const ynabTransactions = mapCsvTransactionsToYnabTransactions(
+                    records,
+                    lastSyncDate
+                );
+
+                if (ynabTransactions.length === 0) {
+                    return res
+                        .status(200)
+                        .send('No new transactions to import');
+                }
+
+                // Upload to YNAB
+                const ynabAPI = new ynab.API(process.env.YNAB_TOKEN!);
+                const dto: ynab.SaveTransactionsWrapper = {
+                    transactions: ynabTransactions,
+                };
+
+                await ynabAPI.transactions.createTransactions(
+                    process.env.YNAB_BUDGET_ID!,
+                    dto
+                );
+
+                res.status(200).send(
+                    `Successfully imported ${ynabTransactions.length} transactions`
+                );
+            } catch (error) {
+                console.error('Error processing CSV:', error);
+                res.status(500).send('Error processing CSV file');
+            }
+        });
     });
 }

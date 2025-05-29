@@ -135,10 +135,33 @@
                     const formData = new FormData();
                     formData.append('csv', file);
 
+                    // Get credentials from localStorage or prompt user
+                    let credentials = localStorage.getItem('auth_credentials');
+                    if (!credentials) {
+                        const username = prompt('Please enter your username:');
+                        const password = prompt('Please enter your password:');
+                        if (!username || !password) {
+                            throw new Error('Authentication required');
+                        }
+                        credentials = btoa(`${username}:${password}`);
+                        localStorage.setItem('auth_credentials', credentials);
+                    }
+
                     const response = await fetch('/api/upload-csv', {
                         method: 'POST',
+                        headers: {
+                            Authorization: `Basic ${credentials}`,
+                        },
                         body: formData,
                     });
+
+                    if (response.status === 401) {
+                        // Clear invalid credentials and retry
+                        localStorage.removeItem('auth_credentials');
+                        throw new Error(
+                            'Invalid credentials. Please try again.'
+                        );
+                    }
 
                     if (!response.ok) {
                         throw new Error(

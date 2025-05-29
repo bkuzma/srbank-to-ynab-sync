@@ -8,6 +8,7 @@ import {
     UpdateTransaction,
     UpdateTransactionsWrapper,
 } from '../types/ynab.types';
+import { basicAuth } from './middleware';
 
 require('dotenv').config();
 const fetch = require('node-fetch');
@@ -374,7 +375,8 @@ const sync = async () => {
 };
 
 export default async function (req: VercelRequest, res: VercelResponse) {
-    await sync();
-
-    res.send('Successfully synced!');
+    basicAuth(req, res, async () => {
+        await sync();
+        res.send('Successfully synced!');
+    });
 }
