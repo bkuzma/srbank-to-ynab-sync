@@ -9,6 +9,7 @@ import {
     UpdateTransactionsWrapper,
 } from '../types/ynab.types';
 import { basicAuth } from './middleware';
+import { Redis } from '@upstash/redis';
 
 require('dotenv').config();
 const fetch = require('node-fetch');
@@ -39,6 +40,9 @@ const client = new faunadb.Client({
     secret: process.env.FAUNA_KEY!,
     endpoint: process.env.FAUNA_BASE_URL!,
 });
+
+// Initialize Redis client
+const redis = Redis.fromEnv();
 
 enum KV_KEY {
     REFRESH_TOKEN = 'refreshToken',
@@ -77,6 +81,14 @@ const setValueInBucket = async (key: KV_KEY, value: string) => {
             }
         )
     );
+};
+
+const getValueFromKV = async (key: string): Promise<string | null> => {
+    return await redis.get(key);
+};
+
+const setValueInKV = async (key: KV_KEY, value: string) => {
+    await redis.set(key, value);
 };
 
 const fetchToken = async (
@@ -288,7 +300,7 @@ async function getLatestYnabTransactionDate(
 const sync = async () => {
     console.log('Getting new access token...');
 
-    const refreshToken = await getValueFromBucket(KV_KEY.REFRESH_TOKEN);
+    const refreshToken = await getValueFromKV(KV_KEY.REFRESH_TOKEN);
 
     if (!refreshToken) {
         throw new Error('No refresh token found');
@@ -300,7 +312,7 @@ const sync = async () => {
             process.env.BANK_CLIENT_ID!,
             process.env.BANK_CLIENT_SECRET!
         );
-    await setValueInBucket(KV_KEY.REFRESH_TOKEN, newRefreshToken);
+    await setValueInKV(KV_KEY.REFRESH_TOKEN, newRefreshToken);
 
     console.log('Refresh token saved');
 

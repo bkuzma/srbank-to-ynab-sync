@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { parse } from 'csv-parse/sync';
 import { formatInTimeZone } from 'date-fns-tz';
 import * as ynab from 'ynab';
-import faunadb from 'faunadb';
+import { Redis } from '@upstash/redis';
 import { IncomingForm, Fields, Files, File } from 'formidable';
 import fs from 'fs';
 import { basicAuth } from '../middleware';
@@ -13,10 +13,6 @@ require('dotenv').config();
 
 // Runtime check for required env variables
 const requiredEnv = [
-    'FAUNA_KEY',
-    'FAUNA_BASE_URL',
-    'FAUNA_COLLECTION_NAME',
-    'FAUNA_DOCUMENT_ID',
     'YNAB_TOKEN',
     'YNAB_BUDGET_ID',
     'YNAB_CREDIT_CARD_ACCOUNT_ID',
@@ -25,32 +21,15 @@ for (const key of requiredEnv) {
     if (!process.env[key]) throw new Error(`Missing env variable: ${key}`);
 }
 
-const q = faunadb.query;
-const client = new faunadb.Client({
-    secret: process.env.FAUNA_KEY!,
-    endpoint: process.env.FAUNA_BASE_URL!,
-});
+// Initialize Redis client
+const redis = Redis.fromEnv();
 
 enum KV_KEY {
     LAST_SYNC_DATE = 'lastSyncDate',
 }
 
-interface FaunaResponse {
-    data: {
-        [key: string]: string;
-    };
-}
-
-const getValueFromBucket = async (key: string): Promise<string> => {
-    const value = (await client.query(
-        q.Get(
-            q.Ref(
-                q.Collection(process.env.FAUNA_COLLECTION_NAME!),
-                process.env.FAUNA_DOCUMENT_ID!
-            )
-        )
-    )) as FaunaResponse;
-    return value.data[key];
+const getValueFromKV = async (key: string): Promise<string | null> => {
+    return await redis.get(key);
 };
 
 const getDateString = (date: Date): string => {
