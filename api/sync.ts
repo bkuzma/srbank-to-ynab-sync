@@ -283,18 +283,31 @@ const dedupeTransactions = (
 async function getLatestYnabTransactionDate(
     accountId: string
 ): Promise<string> {
+    console.log('Getting latest YNAB transaction date for account:', accountId);
     const ynabAPI = new ynab.API(process.env.YNAB_TOKEN!);
-    const transactionsResponse = await ynabAPI.transactions.getTransactions(
-        process.env.YNAB_BUDGET_ID!,
-        accountId,
-        undefined,
-        1
-    );
-    const transactions = transactionsResponse.data.transactions;
-    if (transactions.length === 0) {
-        return '1900-01-01';
+    try {
+        const transactionsResponse = await ynabAPI.transactions.getTransactions(
+            process.env.YNAB_BUDGET_ID!,
+            accountId,
+            undefined,
+            1
+        );
+        const transactions = transactionsResponse.data.transactions;
+        if (transactions.length === 0) {
+            console.log(
+                'No transactions found, using default date: 1900-01-01'
+            );
+            return '1900-01-01';
+        }
+        console.log('Latest transaction date:', transactions[0].date);
+        return transactions[0].date;
+    } catch (error) {
+        console.error('Error getting latest YNAB transaction:', error);
+        // If we can't get the latest transaction, default to 30 days ago
+        const defaultDate = getDateString(subDays(new Date(), 30));
+        console.log('Using default date:', defaultDate);
+        return defaultDate;
     }
-    return transactions[0].date;
 }
 
 const sync = async () => {
@@ -388,7 +401,18 @@ const sync = async () => {
 
 export default async function (req: VercelRequest, res: VercelResponse) {
     basicAuth(req, res, async () => {
-        await sync();
-        res.send('Successfully synced!');
+        try {
+            await sync();
+            res.send('Successfully synced!');
+        } catch (error) {
+            console.error('Sync error:', error);
+            res.status(500).send({
+                error: 'Sync failed',
+                message:
+                    error instanceof Error
+                        ? error.message
+                        : 'Unknown error occurred',
+            });
+        }
     });
 }

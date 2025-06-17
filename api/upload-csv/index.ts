@@ -36,6 +36,15 @@ const getDateString = (date: Date): string => {
     return formatInTimeZone(date, 'Europe/Oslo', 'yyyy-MM-dd');
 };
 
+// Add date validation function
+function isValidYnabDate(date: Date): boolean {
+    const now = new Date();
+    const fiveYearsAgo = new Date();
+    fiveYearsAgo.setFullYear(now.getFullYear() - 5);
+
+    return date <= now && date >= fiveYearsAgo;
+}
+
 interface CsvTransaction {
     Kjøpsdato: string;
     Posteringsdato: string;
@@ -48,6 +57,10 @@ function cleanDate(dateStr: string | undefined | null): string {
     return dateStr.replace(/^"+|"+$/g, '').trim();
 }
 
+function getKjøpsdato(transaction: any): string | undefined {
+    return transaction.Kjøpsdato || transaction.kjøpsdato;
+}
+
 function getPosteringsdato(transaction: any): string | undefined {
     return transaction.Posteringsdato || transaction.posteringsdato;
 }
@@ -58,23 +71,37 @@ const mapCsvTransactionsToYnabTransactions = (
 ): ynab.SaveTransaction[] => {
     const occurenceMap: { [key: string]: number } = {};
     const filtered = csvTransactions.filter((transaction, idx) => {
-        const posteringsdato = getPosteringsdato(transaction);
-        if (!posteringsdato) return false;
-        const cleaned = cleanDate(posteringsdato);
-        const transactionDate = getDateString(new Date(cleaned));
-        const shouldInclude = transactionDate > lastSyncDate;
+        const kjøpsdato = getKjøpsdato(transaction);
+        if (!kjøpsdato) return false;
+        const cleaned = cleanDate(kjøpsdato);
+        const transactionDate = new Date(cleaned);
+
+        // Validate date is within YNAB's allowed range
+        if (!isValidYnabDate(transactionDate)) {
+            console.warn(`Skipping transaction with invalid date: ${cleaned}`);
+            return false;
+        }
+
+        const transactionDateStr = getDateString(transactionDate);
+        const shouldInclude = transactionDateStr > lastSyncDate;
         return shouldInclude;
     });
     return filtered.map((transaction) => {
+        const kjøpsdato = getKjøpsdato(transaction);
         const posteringsdato = getPosteringsdato(transaction);
-        const transactionKey = `${posteringsdato}${transaction.Beløp}`;
+        const transactionKey = `${kjøpsdato}${transaction.Beløp}`;
         if (!occurenceMap[transactionKey]) {
             occurenceMap[transactionKey] = 1;
         } else {
             occurenceMap[transactionKey] += 1;
         }
         const occurrence = occurenceMap[transactionKey];
-        const date = cleanDate(posteringsdato);
+        const date = cleanDate(kjøpsdato);
+
+        // Check if transaction is posted (cleared)
+        const isPosted =
+            posteringsdato && new Date(cleanDate(posteringsdato)) <= new Date();
+
         // Convert amount to milliunits (multiply by 1000)
         // Replace comma with dot and convert to number
         const amount = Number(
@@ -86,7 +113,9 @@ const mapCsvTransactionsToYnabTransactions = (
             date,
             amount,
             payee_name: transaction.Beskrivelse,
-            cleared: 'cleared' as unknown as ynab.SaveTransaction['cleared'],
+            cleared: (isPosted
+                ? 'cleared'
+                : 'uncleared') as ynab.SaveTransaction['cleared'],
             import_id: importId,
         };
     });
