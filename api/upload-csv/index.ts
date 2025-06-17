@@ -58,23 +58,55 @@ function cleanDate(dateStr: string | undefined | null): string {
 }
 
 function getKjøpsdato(transaction: any): string | undefined {
-    return transaction.Kjøpsdato || transaction.kjøpsdato;
+    // Try both with and without quotes, and with different cases
+    return (
+        transaction['Kjøpsdato'] ||
+        transaction['kjøpsdato'] ||
+        transaction.Kjøpsdato ||
+        transaction.kjøpsdato
+    );
 }
 
 function getPosteringsdato(transaction: any): string | undefined {
-    return transaction.Posteringsdato || transaction.posteringsdato;
+    // Try both with and without quotes, and with different cases
+    return (
+        transaction['Posteringsdato'] ||
+        transaction['posteringsdato'] ||
+        transaction.Posteringsdato ||
+        transaction.posteringsdato
+    );
 }
 
 const mapCsvTransactionsToYnabTransactions = (
     csvTransactions: CsvTransaction[],
     lastSyncDate: string
 ): ynab.SaveTransaction[] => {
+    console.log('Last sync date from YNAB:', lastSyncDate);
     const occurenceMap: { [key: string]: number } = {};
     const filtered = csvTransactions.filter((transaction, idx) => {
         const kjøpsdato = getKjøpsdato(transaction);
-        if (!kjøpsdato) return false;
+        if (!kjøpsdato) {
+            console.log('No kjøpsdato found for transaction:', transaction);
+            return false;
+        }
         const cleaned = cleanDate(kjøpsdato);
         const transactionDate = new Date(cleaned);
+        const transactionDateStr = getDateString(transactionDate);
+
+        // Debug logging with detailed date comparison
+        console.log('Processing transaction:', {
+            rawDate: kjøpsdato,
+            cleanedDate: cleaned,
+            parsedDate: transactionDate.toISOString(),
+            formattedDate: transactionDateStr,
+            lastSyncDate,
+            isAfterLastSync: transactionDateStr > lastSyncDate,
+            comparison: {
+                transactionDateStr,
+                lastSyncDate,
+                result: transactionDateStr > lastSyncDate,
+            },
+        });
 
         // Validate date is within YNAB's allowed range
         if (!isValidYnabDate(transactionDate)) {
@@ -82,10 +114,21 @@ const mapCsvTransactionsToYnabTransactions = (
             return false;
         }
 
-        const transactionDateStr = getDateString(transactionDate);
         const shouldInclude = transactionDateStr > lastSyncDate;
+        if (!shouldInclude) {
+            console.log('Skipping transaction - date not after last sync:', {
+                transactionDate: transactionDateStr,
+                lastSyncDate,
+                comparison: transactionDateStr > lastSyncDate,
+            });
+        }
         return shouldInclude;
     });
+
+    console.log('Filtered transactions count:', filtered.length);
+    if (filtered.length === 0) {
+        console.log('No transactions passed the date filter');
+    }
     return filtered.map((transaction) => {
         const kjøpsdato = getKjøpsdato(transaction);
         const posteringsdato = getPosteringsdato(transaction);
@@ -140,8 +183,12 @@ async function getLatestYnabTransactionDate(
         if (nonTransferTransactions.length === 0) {
             return '1900-01-01';
         }
-        // Return the date of the last (most recent) non-transfer transaction
-        return nonTransferTransactions[nonTransferTransactions.length - 1].date;
+        // Sort transactions by date in descending order (newest first)
+        const sortedTransactions = nonTransferTransactions.sort(
+            (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+        );
+        // Return the date of the most recent transaction
+        return sortedTransactions[0].date;
     } catch (error) {
         console.error('Error fetching latest YNAB transaction date:', error);
         // Fallback to a very old date to allow all transactions
@@ -190,7 +237,6 @@ export default async function (req: VercelRequest, res: VercelResponse) {
 
                 // Parse CSV data
                 const records = parse(preprocessedCsv, {
-                    columns: true,
                     skip_empty_lines: true,
                     delimiter: ';',
                     trim: true,
@@ -201,6 +247,12 @@ export default async function (req: VercelRequest, res: VercelResponse) {
                     ltrim: true,
                     rtrim: true,
                     quote: '"',
+                    // Handle accented characters in headers
+                    columns: (headers: string[]) => {
+                        return headers.map((header) =>
+                            header.replace(/^"+|"+$/g, '').trim()
+                        );
+                    },
                 }) as CsvTransaction[];
 
                 // Get last sync date from YNAB
